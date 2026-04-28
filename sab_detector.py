@@ -14,11 +14,11 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 load_dotenv()
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-SHOP_REGION = {
+SINGLE_CARD_REGION = {
     "left": 600,
-    "top": 120,
-    "width": 1050,
-    "height": 760
+    "top": 470,
+    "width": 1120,
+    "height": 330
 }
 
 WEATHER_REGION = {
@@ -28,14 +28,14 @@ WEATHER_REGION = {
     "height": 240
 }
 
-SCROLL_STEPS = 65
-SCROLL_AMOUNT = -120
-RETURN_SCROLL_AMOUNT = 8500
-WAIT_AFTER_SCROLL = 0.25
+CARD_SCAN_STEPS = 15
+RETURN_SCROLL_AMOUNT = 6000
+CARD_SCROLL_AMOUNT = -430 #orig -415
+WAIT_AFTER_SCROLL = 0.35
 SCAN_EVERY_SECONDS = 30
 
 # Turn this on for one test if a dice gets missed.
-# It will create debug_card_step_... PNG files.
+# creates debug_card_step_# and debug_status_crop_step_# PNG files.
 SAVE_CARD_DEBUG_IMAGES = True
 SAVE_WEATHER_DEBUG_IMAGES = False
 CLEAN_DEBUG_IMAGES_ON_START = True
@@ -58,8 +58,9 @@ TARGET_DICE = [
     "Uriel Dice",
     "Overlord Dice",
     "Baddies Dice",
+    "Reality Dice",
 
-    # Testing item
+    # testing item since other dices r too rare to test with, will remove later
     "Crystallum Dice"
 ]
 
@@ -99,10 +100,42 @@ OUT_OF_STOCK_PATTERNS = [
     "nost0ck",
     "no5tock",
     "n0stock",
-    "notstock"
+    "notstock",
+    "nofstock",
+    "noslog",
+    "nostog",
+    "nostogs",
+    "nosuggs",
+    "nosuoek",
+    "nostiock",
+    "nosiock",
+    "0siock",
+    "nosog",
+    "nosuoets",
+    "nosrods",
+    "nonstock",
+    "noxfstiock",
+    "nonstiogk",
+    "nosoe",
+    "nosroere",
+    "nosioer",
+    "nostoel",
+    "nofstiogk",
+    "noxxstiock",
+    "nosiroxere"
 ]
 
-STRICT_QUANTITY_RE = re.compile(r"(?<![a-z0-9])x\s*\d+\b", re.IGNORECASE)
+STRICT_QUANTITY_RE = re.compile(r"(?<![a-z0-9])x[ \t]*\d+\b", re.IGNORECASE)
+QUANTITY_OCR_WHITELIST = "xX\u00d70123456789"
+QUANTITY_OCR_CONFIGS = [
+    f"--psm 6 -c tessedit_char_whitelist={QUANTITY_OCR_WHITELIST}",
+    f"--psm 7 -c tessedit_char_whitelist={QUANTITY_OCR_WHITELIST}",
+    f"--psm 11 -c tessedit_char_whitelist={QUANTITY_OCR_WHITELIST}"
+]
+NO_STOCK_OCR_CONFIGS = ["--psm 6", "--psm 11"]
+NO_STOCK_OCR_THRESHOLDS = (110, 130, 150, 170)
+RED_STATUS_PIXEL_THRESHOLD = 50
+GREEN_STATUS_PIXEL_THRESHOLD = 30
 WEATHER_MAX_LINES = 3
 WEATHER_LINE_SUFFIX_TOLERANCE = 2
 last_sent_message = ""
@@ -110,25 +143,18 @@ DEBUG_IMAGE_PATTERNS = [
     "debug_weather.png",
     "debug_weather_step_*.png",
     "debug_card_step_*.png",
+    "debug_status_crop_step_*.png",
     "debug_shop_step_*.png",
     "debug_scan_step_*.png",
     "shop_crop_debug.png"
 ]
-CARD_REGION_LAYOUTS = {
-    1: {
-        "name_box": (0.45, 0.40, 0.98, 0.80),
-        "quantity_boxes": [
-            (0.38, 0.48, 0.76, 1.28),
-            (0.43, 0.44, 0.72, 1.08)
-        ]
-    },
-    2: {
-        "name_box": (0.45, 0.00, 0.98, 0.38),
-        "quantity_boxes": [
-            (0.45, 0.28, 0.62, 0.68),
-            (0.40, 0.18, 0.70, 0.68)
-        ]
-    }
+SINGLE_CARD_LAYOUT = {
+    "name_box": (0.28, 0.04, 0.98, 0.62),
+    "status_box": (0.445, 0.56, 0.72, 0.79),
+    "quantity_boxes": [
+        (0.28, 0.18, 0.92, 0.74),
+        (0.34, 0.30, 0.78, 0.72)
+    ]
 }
 
 
@@ -199,12 +225,42 @@ def crop_with_relative_box(img, relative_box):
     return img.crop((left, top, right, bottom))
 
 
+def get_status_crop(card_img):
+    return crop_with_relative_box(card_img, SINGLE_CARD_LAYOUT["status_box"])
+
+
+def save_card_debug_images(card_img, step_number):
+    if not SAVE_CARD_DEBUG_IMAGES:
+        return
+
+    card_img.save(f"debug_card_step_{step_number}.png")
+    get_status_crop(card_img).save(f"debug_status_crop_step_{step_number}.png")
+
+
 def split_nonempty_lines(text):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def get_normalized_lines(text):
     return [normalize_text(line) for line in split_nonempty_lines(text)]
+
+
+def get_normalized_words(text):
+    return [word for word in (normalize_text(part) for part in text.split()) if word]
+
+
+def line_has_exact_dice_word_sequence(line, dice):
+    line_words = get_normalized_words(line)
+    dice_words = get_normalized_words(dice)
+
+    if not line_words or not dice_words or len(dice_words) > len(line_words):
+        return False
+
+    for index in range(len(line_words) - len(dice_words) + 1):
+        if line_words[index:index + len(dice_words)] == dice_words:
+            return True
+
+    return False
 
 
 def read_text_variants(img, configs, thresholds):
@@ -263,9 +319,80 @@ def is_out_of_stock(text):
     return False
 
 
+def read_out_of_stock_text_variants(card_img, card_text):
+    variants = [card_text]
+
+    for config in NO_STOCK_OCR_CONFIGS:
+        if config != "--psm 6":
+            variants.append(pytesseract.image_to_string(card_img, config=config))
+
+    for threshold in NO_STOCK_OCR_THRESHOLDS:
+        processed = preprocess_for_ocr(card_img, threshold=threshold, scale=3)
+        for config in NO_STOCK_OCR_CONFIGS:
+            variants.append(pytesseract.image_to_string(processed, config=config))
+
+    return variants
+
+
+def detect_out_of_stock_from_card(card_img, card_text):
+    for text in read_out_of_stock_text_variants(card_img, card_text):
+        if is_out_of_stock(text):
+            return True, text.strip()
+
+    return False, ""
+
+
+def is_red_status_pixel(r, g, b):
+    return r > 150 and g < 100 and b < 100
+
+
+def is_green_status_pixel(r, g, b):
+    return g > 130 and r < 120 and b < 120
+
+
+def detect_color_stock_status(card_img):
+    status_crop = get_status_crop(card_img)
+    red_pixels = 0
+    green_pixels = 0
+
+    for r, g, b in status_crop.convert("RGB").getdata():
+        if is_red_status_pixel(r, g, b):
+            red_pixels += 1
+        if is_green_status_pixel(r, g, b):
+            green_pixels += 1
+
+    return {
+        "red_status_pixels": red_pixels,
+        "green_status_pixels": green_pixels,
+        "color_out_of_stock_detected": red_pixels >= RED_STATUS_PIXEL_THRESHOLD,
+        "color_quantity_detected": green_pixels >= GREEN_STATUS_PIXEL_THRESHOLD
+    }
+
+
 def has_quantity(text):
-    text = text.replace("×", "x").replace("X", "x")
+    text = normalize_quantity_text(text)
     return bool(STRICT_QUANTITY_RE.search(text))
+
+
+def normalize_quantity_text(text):
+    quantity_chars = str.maketrans({
+        "X": "x",
+        "\u00d7": "x",
+        "\u2715": "x",
+        "\u2716": "x",
+        "\u2573": "x"
+    })
+    return text.replace("Ã—", "x").translate(quantity_chars)
+
+
+def get_quantity_text_near_dice_name(card_text, dice_name):
+    lines = split_nonempty_lines(card_text)
+
+    for index, line in enumerate(lines):
+        if line_has_exact_dice_word_sequence(line, dice_name):
+            return "\n".join(lines[index:index + 3])
+
+    return ""
 
 
 def detect_weather_name_from_lines(lines):
@@ -302,20 +429,22 @@ def find_loose_target_dice_name(card_text):
     return None
 
 
-def detect_exact_dice_name_from_card(card_img, card_text, card_index):
+def detect_exact_dice_name_from_card(card_img, card_text):
+    raw_lines = split_nonempty_lines(card_text)
     raw_normalized_lines = get_normalized_lines(card_text)
 
     for dice in TARGET_DICE:
         dice_norm = normalize_text(dice)
         if dice_norm in raw_normalized_lines:
             return display_dice_name(dice)
+        if any(line_has_exact_dice_word_sequence(line, dice) for line in raw_lines):
+            return display_dice_name(dice)
 
     loose_name = find_loose_target_dice_name(card_text)
     if loose_name is None:
         return None
 
-    layout = CARD_REGION_LAYOUTS[card_index]
-    name_crop = crop_with_relative_box(card_img, layout["name_box"])
+    name_crop = crop_with_relative_box(card_img, SINGLE_CARD_LAYOUT["name_box"])
     name_texts = read_text_variants(name_crop, ["--psm 6", "--psm 7"], [150])
     normalized_lines = []
 
@@ -326,36 +455,31 @@ def detect_exact_dice_name_from_card(card_img, card_text, card_index):
         dice_norm = normalize_text(dice)
         if dice_norm in normalized_lines:
             return display_dice_name(dice)
+        if any(line_has_exact_dice_word_sequence(line, dice) for text in name_texts for line in split_nonempty_lines(text)):
+            return display_dice_name(dice)
 
     return None
 
 
-def detect_quantity_from_card(card_img, card_text, card_index, require_fallback):
+def detect_quantity_from_card(card_img, card_text, detected_dice_name, require_fallback):
     quantity_texts = [card_text]
-    layout = CARD_REGION_LAYOUTS[card_index]
+    nearby_text = get_quantity_text_near_dice_name(card_text, detected_dice_name)
 
-    if has_quantity(card_text):
-        return True, card_text.strip()
+    if has_quantity(nearby_text):
+        return True, nearby_text.strip()
 
     if not require_fallback:
         return False, card_text.strip()
 
-    for relative_box in layout["quantity_boxes"]:
+    for relative_box in SINGLE_CARD_LAYOUT["quantity_boxes"]:
         crop = crop_with_relative_box(card_img, relative_box)
+        for config in QUANTITY_OCR_CONFIGS:
+            quantity_texts.append(pytesseract.image_to_string(crop, config=config))
+
         for threshold in (110, 130, 150):
             processed = preprocess_for_ocr(crop, threshold=threshold, scale=4)
-            quantity_texts.append(
-                pytesseract.image_to_string(
-                    processed,
-                    config="--psm 6 -c tessedit_char_whitelist=xX×0123456789"
-                )
-            )
-            quantity_texts.append(
-                pytesseract.image_to_string(
-                    processed,
-                    config="--psm 7 -c tessedit_char_whitelist=xX×0123456789"
-                )
-            )
+            for config in QUANTITY_OCR_CONFIGS:
+                quantity_texts.append(pytesseract.image_to_string(processed, config=config))
 
     for text in quantity_texts:
         if has_quantity(text):
@@ -375,14 +499,19 @@ def log_weather_detection(step_number, raw_text, detected_weather):
     )
 
 
-def log_card_detection(step_number, card_index, raw_text, detected_dice_name, no_stock_detected, quantity_detected, decision):
+def log_card_detection(step_number, raw_text, detected_dice_name, no_stock_detected, quantity_detected, decision, color_status=None):
+    color_status = color_status or {}
     verbose_log(
         "\n".join([
-            f"CARD step={step_number} card={card_index}",
+            f"CARD step={step_number}",
             f"raw_ocr={raw_text or '<empty>'}",
             f"detected_dice_name={detected_dice_name or 'None'}",
             f"no_stock_detected={no_stock_detected}",
             f"quantity_detected={quantity_detected}",
+            f"red_status_pixels={color_status.get('red_status_pixels', 0)}",
+            f"green_status_pixels={color_status.get('green_status_pixels', 0)}",
+            f"color_out_of_stock_detected={color_status.get('color_out_of_stock_detected', False)}",
+            f"color_quantity_detected={color_status.get('color_quantity_detected', False)}",
             f"decision={decision}",
             "-" * 20
         ])
@@ -424,28 +553,16 @@ def detect_weather(step_number):
     return []
 
 
-def split_shop_into_card_regions(shop_img):
-    width, height = shop_img.size
-
-    cards = []
-
-    # Upper card area
-    cards.append(shop_img.crop((0, 250, width, 500)))
-
-    # Lower card area - start at 501 to avoid 45-pixel overlap with upper region
-    cards.append(shop_img.crop((0, 501, width, 735)))
-
-    return cards
-
-
 def display_dice_name(dice):
     return DISPLAY_NAME_FIXES.get(dice, dice)
 
 
-def detect_in_stock_dice_from_card(card_img, card_text, step_number, card_index):
+def detect_in_stock_dice_from_card(card_img, card_text, step_number):
     found = []
-    card_out = is_out_of_stock(card_text)
-    detected_dice_name = detect_exact_dice_name_from_card(card_img, card_text, card_index)
+    ocr_out_of_stock, no_stock_source_text = detect_out_of_stock_from_card(card_img, card_text)
+    color_status = detect_color_stock_status(card_img)
+    card_out = ocr_out_of_stock or color_status["color_out_of_stock_detected"]
+    detected_dice_name = detect_exact_dice_name_from_card(card_img, card_text)
     quantity_detected = False
     quantity_source_text = card_text.strip()
 
@@ -453,12 +570,12 @@ def detect_in_stock_dice_from_card(card_img, card_text, step_number, card_index)
         loose_name = find_loose_target_dice_name(card_text)
         log_card_detection(
             step_number,
-            card_index,
             card_text,
             loose_name,
             card_out,
             quantity_detected,
-            "SKIPPED: no exact normalized target dice name match."
+            "SKIPPED: no exact normalized target dice name match.",
+            color_status
         )
         return found
 
@@ -466,48 +583,64 @@ def detect_in_stock_dice_from_card(card_img, card_text, step_number, card_index)
         quantity_detected, quantity_source_text = detect_quantity_from_card(
             card_img,
             card_text,
-            card_index,
+            detected_dice_name,
             require_fallback=False
         )
+        no_stock_log_text = card_text
+        if no_stock_source_text and no_stock_source_text != card_text.strip():
+            no_stock_log_text = f"{card_text}\n[no_stock_source]\n{no_stock_source_text}"
+
         log_card_detection(
             step_number,
-            card_index,
-            card_text,
+            no_stock_log_text,
             detected_dice_name,
             card_out,
             quantity_detected,
-            "SKIPPED: NO STOCK detected in the same card OCR."
+            "SKIPPED: NO STOCK detected by OCR or red status pixels.",
+            color_status
         )
         return found
 
     quantity_detected, quantity_source_text = detect_quantity_from_card(
         card_img,
         card_text,
-        card_index,
+        detected_dice_name,
         require_fallback=True
     )
 
     if not quantity_detected:
         log_card_detection(
             step_number,
-            card_index,
             card_text,
             detected_dice_name,
             card_out,
             quantity_detected,
-            "SKIPPED: no strict x<number> quantity found in this card."
+            "SKIPPED: no strict x<number> quantity found in this card.",
+            color_status
+        )
+        return found
+
+    if not color_status["color_quantity_detected"]:
+        log_card_detection(
+            step_number,
+            f"{card_text}\n[quantity_source]\n{quantity_source_text}",
+            detected_dice_name,
+            card_out,
+            quantity_detected,
+            "SKIPPED: strict quantity found, but no green status pixels found.",
+            color_status
         )
         return found
 
     found.append(detected_dice_name)
     log_card_detection(
         step_number,
-        card_index,
         f"{card_text}\n[quantity_source]\n{quantity_source_text}",
         detected_dice_name,
         card_out,
         quantity_detected,
-        "ACCEPTED: exact dice name + strict quantity + no NO STOCK."
+        "ACCEPTED: exact dice name + strict quantity + green status pixels + no NO STOCK/red status.",
+        color_status
     )
 
     return found
@@ -521,41 +654,34 @@ def scan_shop_dice():
     print("Starting shop scan from current position...")
     time.sleep(1)
 
-    for step in range(SCROLL_STEPS):
+    for step in range(CARD_SCAN_STEPS):
         step_number = step + 1
-        print(f"Shop scan step {step_number}/{SCROLL_STEPS}")
+        print(f"Shop scan step {step_number}/{CARD_SCAN_STEPS}")
 
         # Check weather every scroll step in case it changes mid-scan.
         weather_now = detect_weather(step_number)
         all_weather.extend(weather_now)
 
-        shop_img = take_screenshot(SHOP_REGION)
+        card_img = take_screenshot(SINGLE_CARD_REGION)
 
-        full_shop_text = read_text_from_image(shop_img)
-        all_raw_text.append(full_shop_text)
+        save_card_debug_images(card_img, step_number)
 
-        card_imgs = split_shop_into_card_regions(shop_img)
+        card_text = read_text_from_image(card_img)
+        all_raw_text.append(card_text)
 
-        for index, card_img in enumerate(card_imgs):
-            if SAVE_CARD_DEBUG_IMAGES:
-                card_img.save(f"debug_card_step_{step_number}_{index + 1}.png")
+        print("Card OCR:")
+        print(card_text)
+        print("-" * 20)
 
-            card_text = read_text_from_image(card_img)
+        dice_found = detect_in_stock_dice_from_card(
+            card_img,
+            card_text,
+            step_number
+        )
+        all_in_stock_dice.extend(dice_found)
 
-            print(f"Card {index + 1} OCR:")
-            print(card_text)
-            print("-" * 20)
-
-            dice_found = detect_in_stock_dice_from_card(
-                card_img,
-                card_text,
-                step_number,
-                index + 1
-            )
-            all_in_stock_dice.extend(dice_found)
-
-        if step < SCROLL_STEPS - 1:
-            pyautogui.scroll(SCROLL_AMOUNT)
+        if step < CARD_SCAN_STEPS - 1:
+            pyautogui.scroll(CARD_SCROLL_AMOUNT)
             time.sleep(WAIT_AFTER_SCROLL)
 
     print("Returning shop near starting position...")
