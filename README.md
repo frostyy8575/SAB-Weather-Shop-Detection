@@ -22,6 +22,7 @@ This project does **not** use Roblox executors (Not bannable), memory editing, o
 - Weather checks during the scan
 - Optional debug images for card crops and weather crops
 - Discord webhook notifications
+- Color detection system as a backup to detect when an item is in stock or not.
 
 ## Requirements
 
@@ -72,7 +73,7 @@ Create a `.env` file in the repo root:
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your_webhook_here
 ```
 
-The detector loads this value at startup and uses it for Discord notifications.
+The detector loads this value at startup and uses it for Discord notifications. This allows the user to not leak their discord webhook url to others.
 
 ## Run the Detector
 
@@ -95,6 +96,7 @@ Before running:
 - Screen position, UI scale, lighting, overlap, and motion can all affect OCR results.
 - This script is intentionally strict, so it may miss some real items instead of risking false reports.
 - Debug PNGs can help tune regions and OCR behavior if detections are missed.
+- Crops are tuned so the detector starts at Kraken Dice and ends at Baddie Dice. Tune CARD_STEP_SCANS & RETURN_SCROLL_AMOUNT to start at a higher position or lower position item.
 
 ## Security Warning
 
