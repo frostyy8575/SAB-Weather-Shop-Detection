@@ -584,29 +584,41 @@ def looks_like_shop(text):
 
 
 def build_discord_message(weather, in_stock_dice):
+    weather_emojis = {
+        "Solar": "☀️",
+        "Celestial": "🌌",
+        "Void": "🕳️",
+        "Charged": "⚡",
+        "Rainy": "🌧️",
+        "Cold": "❄️",
+        "Golden": "🟡",
+        "Emerald": "🟢",
+        "Diamond": "💎"
+    }
+
     lines = []
-    lines.append("[SAB] **Shop/Weather Scan**")
+    lines.append("[SAB] Shop/Weather Scan")
 
     lines.append("")
+    lines.append("🌦️ Weather Stock")
     if weather:
-        lines.append("**Weather Detected:**")
         for w in weather:
-            lines.append(f"- {w}")
+            lines.append(f"- {weather_emojis.get(w, '🌦️')} {w}")
     else:
-        lines.append("**Weather Detected:** None from target list")
+        lines.append("- None from target list")
 
     lines.append("")
+    lines.append("🎲 Dice Stock")
     if in_stock_dice:
-        lines.append("**Target Dice In Stock:**")
         for dice in in_stock_dice:
             lines.append(f"- {dice}")
     else:
-        lines.append("**Target Dice In Stock:** None detected")
+        lines.append("- None detected")
 
     lines.append("")
-    lines.append("_Only reports target dice when the same OCR card has an exact dice-name line, a strict x<number> quantity, and no NO STOCK text._")
+    lines.append("Only reports target dice when the same OCR card has an exact dice-name line, a strict x<number> quantity, and no NO STOCK text.")
 
-    return "\n".join(lines)
+    return "```text\n" + "\n".join(lines) + "\n```"
 
 
 def main():
