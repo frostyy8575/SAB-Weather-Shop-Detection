@@ -14,6 +14,32 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 load_dotenv()
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# use discord role ids
+ROLE_IDS = {
+    "Kraken Dice": "1499171014675009648",
+    "Seraphic Dice": "1499171089350135848",
+    "Galactic Dice": "1499171130827604068",
+    "Eldritch Dice": "1499171182132334602",
+    "Emperor Dice": "1499171246947041420",
+    "Annihilation Dice": "1499171295110103090",
+    "Disaster Dice": "1499171351250993203",
+    "Impossible Dice": "1499171399170920448",
+    "Limbo Dice": "1499171455454150716",
+    "Chronos Dice": "1499171498504487013",
+    "Yinyang Dice": "1499171536681308341",
+    "Uriel Dice": "1499171618021183599",
+    "Matrix Dice": "1499171713467027587",
+    "Overlord Dice": "1499171747059204096",
+    "Baddies Dice": "1498530792362610840",
+    "Charged": "1499172052135968790",
+    "Void": "1499172110008844330",
+    "Celestial": "1499172159816466432",
+    "Solar": "1499172208445100072",
+    "Rainy": "1499172246684438718",
+    "Cosmic Dice": "1498530547939545128",
+    "Apex Dice": "1498530655972098178"
+}
+
 SINGLE_CARD_REGION = {
     "left": 600,
     "top": 470,
@@ -32,7 +58,7 @@ CARD_SCAN_STEPS = 15
 RETURN_SCROLL_AMOUNT = 6000
 CARD_SCROLL_AMOUNT = -430 #orig -415
 WAIT_AFTER_SCROLL = 0.35
-SCAN_EVERY_SECONDS = 30
+SCAN_EVERY_SECONDS = 240
 
 # Turn this on for one test if a dice gets missed.
 # creates debug_card_step_# and debug_status_crop_step_# PNG files.
@@ -79,6 +105,27 @@ TARGET_WEATHERS = [
     "Emerald",
     "Diamond"
 ]
+
+COSMIC_DICE = {
+    "Kraken Dice",
+    "Seraphic Dice",
+    "Galactic Dice",
+    "Eldritch Dice",
+    "Emperor Dice",
+    "Annihilation Dice",
+    "Disaster Dice",
+    "Impossible Dice"
+}
+
+APEX_DICE = {
+    "Limbo Dice",
+    "Chronos Dice",
+    "Yinyang Dice",
+    "Matrix Dice",
+    "Uriel Dice",
+    "Overlord Dice",
+    "Baddies Dice"
+}
 
 WEATHER_ALIASES = {
     "Solar": ["solar"],
@@ -160,7 +207,11 @@ SINGLE_CARD_LAYOUT = {
 
 def send_discord_message(message):
     try:
-        response = requests.post(WEBHOOK_URL, json={"content": message})
+        payload = {
+            "content": message,
+            "allowed_mentions": {"parse": ["roles"]}
+        }
+        response = requests.post(WEBHOOK_URL, json=payload)
         if response.status_code not in [200, 204]:
             print(f"Discord webhook error: {response.status_code}")
             print(response.text)
@@ -247,6 +298,42 @@ def get_normalized_lines(text):
 
 def get_normalized_words(text):
     return [word for word in (normalize_text(part) for part in text.split()) if word]
+
+
+def get_role_ping(name):
+    role_id = ROLE_IDS.get(name, "").strip()
+    if not role_id or role_id.upper().startswith("PASTE_") or not role_id.isdigit():
+        return ""
+    return f"<@&{role_id}>"
+
+
+def build_role_pings(weather, in_stock_dice):
+    if not weather and not in_stock_dice:
+        return []
+
+    pings = []
+    seen_pings = set()
+
+    def add_role_ping(name):
+        ping = get_role_ping(name)
+        if ping and ping not in seen_pings:
+            seen_pings.add(ping)
+            pings.append(ping)
+
+    for weather_name in weather:
+        add_role_ping(weather_name)
+
+    displayed_dice = [display_dice_name(dice) for dice in in_stock_dice]
+    for dice in displayed_dice:
+        add_role_ping(dice)
+
+    if any(dice in COSMIC_DICE for dice in displayed_dice):
+        add_role_ping("Cosmic Dice")
+
+    if any(dice in APEX_DICE for dice in displayed_dice):
+        add_role_ping("Apex Dice")
+
+    return pings
 
 
 def line_has_exact_dice_word_sequence(line, dice):
@@ -722,10 +809,12 @@ def build_discord_message(weather, in_stock_dice):
         "Diamond": "💎"
     }
 
-    lines = []
-    lines.append("[SAB] Shop/Weather Scan")
+    header_lines = ["[SAB] Shop/Weather Scan"]
+    role_pings = build_role_pings(weather, in_stock_dice)
+    if role_pings:
+        header_lines.append(" ".join(role_pings))
 
-    lines.append("")
+    lines = []
     lines.append("🌦️ Weather Stock")
     if weather:
         for w in weather:
@@ -744,7 +833,7 @@ def build_discord_message(weather, in_stock_dice):
     lines.append("")
     lines.append("Only reports target dice when the same OCR card has an exact dice-name line, a strict x<number> quantity, and no NO STOCK text.")
 
-    return "```text\n" + "\n".join(lines) + "\n```"
+    return "\n".join(header_lines) + "\n```text\n" + "\n".join(lines) + "\n```"
 
 
 def main():
